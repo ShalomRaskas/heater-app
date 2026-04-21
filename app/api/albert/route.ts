@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
     // ── 3. Build system prompt ─────────────────────────────────────────────────
     const systemPrompt = buildSystemPrompt(playerDataList);
 
-    // ── 4. Tool-use loop ───────────────────────────────────────────────────────
+    // ── 4. Streaming tool-use loop ─────────────────────────────────────────────
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const apiMessages: Anthropic.MessageParam[] = clientMessages.map((m) => ({
@@ -106,66 +106,91 @@ export async function POST(req: NextRequest) {
       content: m.content,
     }));
 
-    let iterations = 0;
+    const encoder = new TextEncoder();
 
-    while (iterations < MAX_TOOL_ITERATIONS) {
-      iterations++;
+    const readable = new ReadableStream({
+      async start(controller) {
+        let hasStreamedAnyText = false;
 
-      const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 2048,
-        system: systemPrompt,
-        tools: TOOLS,
-        messages: apiMessages,
-      });
+        try {
+          let iterations = 0;
 
-      if (response.stop_reason === "tool_use") {
-        const toolUseBlock = response.content.find(
-          (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-        );
+          while (iterations < MAX_TOOL_ITERATIONS) {
+            iterations++;
 
-        if (!toolUseBlock) break;
+            const stream = anthropic.messages.stream({
+              model: "claude-sonnet-4-6",
+              max_tokens: 2048,
+              system: systemPrompt,
+              tools: TOOLS,
+              messages: apiMessages,
+            });
 
-        const toolInput = toolUseBlock.input as {
-          playerName: string;
-          season?: number;
-        };
-        const toolResult = await getPlayerStats(toolInput);
+            // Stream text deltas to the client as they arrive
+            for await (const event of stream) {
+              if (
+                event.type === "content_block_delta" &&
+                event.delta.type === "text_delta"
+              ) {
+                controller.enqueue(encoder.encode(event.delta.text));
+                hasStreamedAnyText = true;
+              }
+            }
 
-        apiMessages.push({ role: "assistant", content: response.content });
-        apiMessages.push({
-          role: "user",
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: toolUseBlock.id,
-              content: JSON.stringify(toolResult),
-            },
-          ],
-        });
+            // Get the completed message to check stop reason and extract tool call
+            const finalMessage = await stream.finalMessage();
 
-        continue;
-      }
+            if (finalMessage.stop_reason === "tool_use") {
+              const toolUseBlock = finalMessage.content.find(
+                (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+              );
 
-      // stop_reason === "end_turn"
-      const text =
-        response.content.find(
-          (b): b is Anthropic.TextBlock => b.type === "text",
-        )?.text ?? "";
+              if (!toolUseBlock) break;
 
-      return new Response(text, {
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-cache",
-        },
-      });
-    }
+              const toolInput = toolUseBlock.input as {
+                playerName: string;
+                season?: number;
+              };
+              const toolResult = await getPlayerStats(toolInput);
 
-    // Hit the iteration cap (shouldn't happen in normal usage)
-    return new Response(
-      "I ran into a lookup loop on that one — try rephrasing the question.",
-      { headers: { "Content-Type": "text/plain; charset=utf-8" } },
-    );
+              apiMessages.push({ role: "assistant", content: finalMessage.content });
+              apiMessages.push({
+                role: "user",
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: toolUseBlock.id,
+                    content: JSON.stringify(toolResult),
+                  },
+                ],
+              });
+
+              continue; // restart the stream with updated messages
+            }
+
+            break; // stop_reason === "end_turn"
+          }
+
+          controller.close();
+        } catch (err) {
+          if (hasStreamedAnyText) {
+            // Partial response is already rendered — close cleanly rather than erroring
+            controller.close();
+          } else {
+            // Nothing rendered yet — signal the client to show the error bubble
+            controller.error(err);
+          }
+        }
+      },
+    });
+
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
   } catch (err) {
     console.error("[/api/albert]", err);
     return new Response(

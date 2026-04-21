@@ -326,15 +326,27 @@ export default function AlbertPanel() {
           );
         }
 
-        const text = await res.text();
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant") {
-            next[next.length - 1] = { ...last, content: text };
-          }
-          return next;
-        });
+        if (!res.body) throw new Error("No response stream.");
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role === "assistant") {
+              next[next.length - 1] = {
+                ...last,
+                content: last.content + chunk,
+              };
+            }
+            return next;
+          });
+        }
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         const msg =
