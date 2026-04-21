@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import Navbar from "@/components/Navbar";
 import AlbertPanel from "@/components/dashboard/AlbertPanel";
 import CockpitPanel from "@/components/dashboard/CockpitPanel";
@@ -82,6 +83,28 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
+  // Fetch pitch movement data for the cockpit chart (Skubal + Miller)
+  const admin = createAdminClient();
+  const PITCHER_IDS = [669373, 695243]; // Skubal, Miller
+
+  const { data: pitchPlayers } = await admin
+    .from("players")
+    .select("id, full_name, team_abbr, throws, position")
+    .in("mlb_id", PITCHER_IDS)
+    .order("mlb_id");
+
+  const { data: pitchData } = await admin
+    .from("player_pitch_data")
+    .select(
+      "player_id, pitch_type, pitch_type_name, avg_velocity, usage_pct, horizontal_break_in, vertical_break_in, whiff_rate, season",
+    )
+    .in(
+      "player_id",
+      (pitchPlayers ?? []).map((p) => p.id),
+    )
+    .eq("season", 2024)
+    .order("usage_pct", { ascending: false });
+
   return (
     <div style={{ position: "relative", zIndex: 1, minHeight: "100vh" }}>
       {/* Mobile gate — shown below md breakpoint instead of the dashboard */}
@@ -106,7 +129,10 @@ export default async function DashboardPage() {
             <AlbertPanel />
             {/* Gutter */}
             <div style={{ background: "rgba(255,255,255,.08)" }} />
-            <CockpitPanel />
+            <CockpitPanel
+              players={pitchPlayers ?? []}
+              pitchData={pitchData ?? []}
+            />
           </div>
 
           {/* Below fold */}

@@ -152,3 +152,8 @@ input[type="range"]:focus::-webkit-slider-thumb {
   transform: scale(1.25);
   box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.6), 0 0 24px rgba(211, 47, 47, 0.6), 0 0 8px rgba(255, 255, 255, 0.8);
 }
+
+/* Albert bubble markdown — collapse trailing paragraph margin */
+.albert-bubble p:last-child {
+  margin-bottom: 0;
+}

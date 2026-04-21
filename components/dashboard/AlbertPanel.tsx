@@ -1,7 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
 
+/* ─── Types ──────────────────────────────────────────────── */
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  isGreeting?: boolean; // display-only; excluded from API calls
+}
+
+/* ─── Styles (same tokens as before) ─────────────────────── */
 const S: Record<string, React.CSSProperties> = {
   root: {
     display: "flex",
@@ -62,8 +71,8 @@ const S: Record<string, React.CSSProperties> = {
   },
   convo: {
     flex: 1,
-    overflow: "hidden",
-    padding: "22px 22px 4px",
+    overflowY: "auto" as const,
+    padding: "22px 22px 8px",
     display: "flex",
     flexDirection: "column",
     gap: "18px",
@@ -97,6 +106,8 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: "16px",
     lineHeight: 1.55,
     letterSpacing: ".002em",
+    flex: 1,
+    minWidth: 0,
   },
   lbl: {
     display: "block",
@@ -108,41 +119,6 @@ const S: Record<string, React.CSSProperties> = {
     letterSpacing: ".14em",
     marginBottom: "7px",
     fontWeight: 500,
-  },
-  stat: {
-    fontFamily: "var(--font-mono)",
-    fontStyle: "normal",
-    color: "rgba(255,255,255,.95)",
-    fontWeight: 500,
-  },
-  callout: {
-    fontFamily: "var(--font-mono)",
-    fontWeight: 600,
-    fontStyle: "normal",
-    background:
-      "linear-gradient(180deg, #ffe55a 0%, #ffd700 30%, #ff9433 65%, #D32F2F 100%)",
-    WebkitBackgroundClip: "text",
-    backgroundClip: "text",
-    color: "transparent",
-    filter: "drop-shadow(0 0 8px rgba(255,107,53,.35))",
-    padding: "0 2px",
-  },
-  genChip: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "8px",
-    marginTop: "12px",
-    padding: "7px 11px",
-    background: "rgba(212,175,55,.08)",
-    border: "0.5px solid rgba(212,175,55,.22)",
-    borderRadius: "999px",
-    fontFamily: "var(--font-mono)",
-    fontStyle: "normal",
-    fontSize: "10px",
-    color: "#d4af37",
-    textTransform: "uppercase" as const,
-    letterSpacing: ".12em",
-    boxShadow: "0 0 14px rgba(212,175,55,.08)",
   },
   suggest: {
     padding: "12px 22px",
@@ -169,7 +145,6 @@ const S: Record<string, React.CSSProperties> = {
     background: "rgba(255,255,255,.03)",
     border: "0.5px solid rgba(255,255,255,.08)",
     cursor: "pointer",
-    transition: "all .2s",
     fontFamily: "inherit",
   },
   composer: {
@@ -217,6 +192,7 @@ const S: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     cursor: "pointer",
     flexShrink: 0,
+    transition: "opacity .15s",
   },
   sources: {
     marginTop: "10px",
@@ -231,321 +207,167 @@ const S: Record<string, React.CSSProperties> = {
   },
 };
 
-const TOOLTIP_DATA = {
-  skenes: {
-    name: "Paul Skenes",
-    tag: "LIVE",
-    sub: "RHP · Pittsburgh · 6′6″ · age 23 · 2024 ROY",
-    stats1: [
-      { v: ".196", k: "opp BA" },
-      { v: "2.11", k: "ERA" },
-      { v: "33.7%", k: "K rate" },
-    ],
-    stats2: [
-      { v: "98.4", k: "FB mph" },
-      { v: "87.1", k: "SL mph" },
-      { v: "48%", k: "whiff SL" },
-    ],
-  },
-  sale: {
-    name: "Chris Sale",
-    tag: "2011",
-    sub: "LHP · Chicago WS · 6′6″ · age 22",
-    stats1: [
-      { v: ".211", k: "opp BA" },
-      { v: "3.69", k: "ERA" },
-      { v: "27.4%", k: "K rate" },
-    ],
-    stats2: [
-      { v: "92.8", k: "FB mph" },
-      { v: "83.2", k: "SL mph" },
-      { v: "38%", k: "whiff SL" },
-    ],
-  },
-};
+/* ─── Starter suggestions (V1 hardcoded) ─────────────────── */
+const SUGGESTIONS = [
+  "Tell me about Skubal's splitter",
+  "Compare Judge and Ohtani at the plate",
+  "Is Miller's start sustainable?",
+];
 
-function PlayerTooltip({ id }: { id: "skenes" | "sale" }) {
-  const d = TOOLTIP_DATA[id];
+/* ─── Typing indicator ────────────────────────────────────── */
+function TypingIndicator() {
   return (
-    <div
-      style={{
-        position: "absolute",
-        left: "48px",
-        bottom: "calc(100% + 6px)",
-        zIndex: 20,
-        minWidth: "260px",
-        padding: "12px 14px",
-        borderRadius: "10px",
-        background: "rgba(12,12,18,.9)",
-        border: "0.5px solid rgba(255,255,255,.12)",
-        backdropFilter: "blur(30px)",
-        WebkitBackdropFilter: "blur(30px)",
-        boxShadow:
-          "0 0 0 0.5px rgba(255,255,255,.04) inset, 0 20px 50px rgba(0,0,0,.6), 0 0 30px rgba(211,47,47,.2)",
-        pointerEvents: "none",
-      }}
-    >
-      {/* Arrow */}
+    <div style={{ display: "flex", gap: "10px", maxWidth: "92%" }}>
+      <div style={S.albertMsgAv}>A</div>
       <div
         style={{
-          position: "absolute",
-          left: "24px",
-          bottom: "-5px",
-          width: "9px",
-          height: "9px",
-          background: "rgba(12,12,18,.9)",
-          borderRight: "0.5px solid rgba(255,255,255,.12)",
-          borderBottom: "0.5px solid rgba(255,255,255,.12)",
-          transform: "rotate(45deg)",
-        }}
-      />
-      <div
-        style={{
-          fontSize: "13px",
-          fontWeight: 600,
-          marginBottom: "2px",
+          ...S.albertBubble,
+          padding: "11px 14px",
           display: "flex",
           alignItems: "center",
           gap: "8px",
-          fontStyle: "normal",
-          fontFamily: "var(--font-inter)",
         }}
       >
-        {d.name}
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: "10px",
-            color: "#D32F2F",
-            textTransform: "uppercase",
-            letterSpacing: ".12em",
-            fontWeight: 400,
-          }}
-        >
-          {d.tag}
-        </span>
-      </div>
-      <div
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: "10px",
-          color: "rgba(255,255,255,.4)",
-          textTransform: "uppercase",
-          letterSpacing: ".12em",
-          marginBottom: "10px",
-          fontStyle: "normal",
-        }}
-      >
-        {d.sub}
-      </div>
-      {[d.stats1, d.stats2].map((stats, gi) => (
-        <div
-          key={gi}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: "10px",
-            paddingTop: "8px",
-            marginTop: gi === 0 ? 0 : "8px",
-            borderTop: "0.5px solid rgba(255,255,255,.08)",
-          }}
-        >
-          {stats.map(({ v, k }) => (
-            <div key={k}>
-              <div
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "14px",
-                  color: "rgba(255,255,255,.95)",
-                  fontWeight: 500,
-                  fontStyle: "normal",
-                }}
-              >
-                {v}
-              </div>
-              <div
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "9px",
-                  color: "rgba(255,255,255,.4)",
-                  textTransform: "uppercase",
-                  letterSpacing: ".1em",
-                  marginTop: "2px",
-                  fontStyle: "normal",
-                }}
-              >
-                {k}
-              </div>
-            </div>
+        <span style={{ display: "inline-flex", gap: "4px", padding: "4px 0" }}>
+          {[0, 0.2, 0.4].map((delay, i) => (
+            <span
+              key={i}
+              style={{
+                width: "5px",
+                height: "5px",
+                borderRadius: "999px",
+                background: "#d4af37",
+                opacity: 0.4,
+                animation: `dot 1.2s ${delay}s infinite ease-in-out`,
+                display: "inline-block",
+              }}
+            />
           ))}
-        </div>
-      ))}
-      <div
-        style={{
-          marginTop: "12px",
-          padding: "7px 10px",
-          borderRadius: "6px",
-          background: "rgba(211,47,47,.15)",
-          border: "0.5px solid rgba(211,47,47,.4)",
-          color: "rgba(255,255,255,.95)",
-          fontFamily: "var(--font-mono)",
-          fontStyle: "normal",
-          fontSize: "10px",
-          letterSpacing: ".14em",
-          textTransform: "uppercase",
-          textAlign: "center",
-          boxShadow: "inset 0 0 10px rgba(211,47,47,.1)",
-        }}
-      >
-        Open full profile →
-      </div>
-    </div>
-  );
-}
-
-function PlayerRow({
-  id,
-  jersey,
-  jerseyColor,
-  name,
-  nameSuffix,
-  role,
-  stat,
-  isHovered,
-  onHover,
-}: {
-  id: "skenes" | "sale";
-  jersey: string;
-  jerseyColor: "pit" | "chw";
-  name: string;
-  nameSuffix?: string;
-  role: string;
-  stat: string;
-  isHovered: boolean;
-  onHover: (id: "skenes" | "sale" | null) => void;
-}) {
-  const jerseyStyles: Record<string, React.CSSProperties> = {
-    pit: {
-      background:
-        "linear-gradient(180deg, rgba(253,181,32,.18), rgba(0,0,0,.4))",
-      border: "0.5px solid rgba(253,181,32,.3)",
-      color: "#fdb520",
-    },
-    chw: {
-      background:
-        "linear-gradient(180deg, rgba(200,200,200,.15), rgba(0,0,0,.4))",
-      border: "0.5px solid rgba(255,255,255,.15)",
-      color: "#dcdcdc",
-    },
-  };
-
-  return (
-    <div
-      style={{ position: "relative" }}
-      onMouseEnter={() => onHover(id)}
-      onMouseLeave={() => onHover(null)}
-    >
-      {isHovered && <PlayerTooltip id={id} />}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "32px 1fr auto",
-          gap: "12px",
-          alignItems: "center",
-          padding: "10px 12px",
-          borderRadius: "9px",
-          background: isHovered
-            ? "linear-gradient(180deg, rgba(211,47,47,.10), rgba(211,47,47,.03))"
-            : "rgba(255,255,255,.03)",
-          border: isHovered
-            ? "0.5px solid rgba(211,47,47,.4)"
-            : "0.5px solid rgba(255,255,255,.08)",
-          boxShadow: isHovered
-            ? "0 0 0 0.5px rgba(211,47,47,.3) inset, 0 0 28px rgba(211,47,47,.18)"
-            : "none",
-          transition: "all 180ms ease-out",
-          cursor: "pointer",
-        }}
-      >
-        <div
-          style={{
-            width: "32px",
-            height: "32px",
-            borderRadius: "7px",
-            display: "grid",
-            placeItems: "center",
-            fontFamily: "var(--font-mono)",
-            fontWeight: 600,
-            fontSize: "10px",
-            letterSpacing: ".02em",
-            fontStyle: "normal",
-            ...jerseyStyles[jerseyColor],
-          }}
-        >
-          {jersey}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-          <span
-            style={{
-              fontFamily: "var(--font-inter)",
-              fontWeight: 500,
-              fontSize: "13px",
-              color: "rgba(255,255,255,.95)",
-              fontStyle: "normal",
-            }}
-          >
-            {name}
-            {nameSuffix && (
-              <em
-                style={{
-                  color: "rgba(255,255,255,.4)",
-                  fontStyle: "normal",
-                  fontSize: "11px",
-                  fontFamily: "var(--font-mono)",
-                  marginLeft: "4px",
-                }}
-              >
-                {nameSuffix}
-              </em>
-            )}
-          </span>
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "10px",
-              color: "rgba(255,255,255,.4)",
-              letterSpacing: ".06em",
-              textTransform: "uppercase",
-              fontStyle: "normal",
-            }}
-          >
-            {role}
-          </span>
-        </div>
+        </span>
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: "11px",
-            color: "rgba(255,255,255,.6)",
-            fontWeight: 500,
             fontStyle: "normal",
+            fontSize: "11px",
+            color: "rgba(255,255,255,.4)",
+            letterSpacing: ".1em",
+            textTransform: "uppercase",
           }}
         >
-          {stat}
+          reasoning through the data
         </span>
       </div>
     </div>
   );
 }
+
+/* ─── Main component ──────────────────────────────────────── */
+const GREETING: Message = {
+  role: "assistant",
+  content:
+    "What do you want to know about baseball today? I have full Statcast data on Judge, Ohtani, Skubal, and Miller — ask me anything.",
+  isGreeting: true,
+};
 
 export default function AlbertPanel() {
-  const [hoveredPlayer, setHoveredPlayer] = useState<"skenes" | "sale" | null>(
-    null
+  const [messages, setMessages] = useState<Message[]>([GREETING]);
+  const [inputValue, setInputValue] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const convoRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Scroll to bottom whenever messages update
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const submit = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || isStreaming) return;
+
+      setError(null);
+      setInputValue("");
+
+      // Build the new message list (excluding greeting from API payload)
+      const userMsg: Message = { role: "user", content: trimmed };
+      const assistantMsg: Message = { role: "assistant", content: "" };
+
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setIsStreaming(true);
+
+      // Build API messages: real conversation history (no greeting)
+      const apiMessages = [...messages, userMsg]
+        .filter((m) => !m.isGreeting && m.content !== "")
+        .map(({ role, content }) => ({ role, content }));
+
+      // Abort any prior in-flight request
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const res = await fetch("/api/albert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: apiMessages }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(
+            (body as { error?: string }).error ??
+              "Albert is unavailable right now.",
+          );
+        }
+
+        const text = await res.text();
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === "assistant") {
+            next[next.length - 1] = { ...last, content: text };
+          }
+          return next;
+        });
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        const msg =
+          err instanceof Error ? err.message : "Something went wrong.";
+        setError(msg);
+        // Remove the empty assistant placeholder
+        setMessages((prev) =>
+          prev[prev.length - 1]?.content === ""
+            ? prev.slice(0, -1)
+            : prev,
+        );
+      } finally {
+        setIsStreaming(false);
+      }
+    },
+    [messages, isStreaming],
   );
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submit(inputValue);
+    }
+  };
+
+  // Show typing indicator when streaming and the last message is still empty
+  const lastMsg = messages[messages.length - 1];
+  const showTyping =
+    isStreaming && lastMsg?.role === "assistant" && lastMsg.content === "";
 
   return (
     <div style={S.root}>
-      {/* Header */}
+      {/* ── Header ── */}
       <div style={S.header}>
         <div style={S.albertAv}>A</div>
         <div>
@@ -560,7 +382,18 @@ export default function AlbertPanel() {
             }}
           >
             Albert
-            <span style={S.statusDot} />
+            <span
+              style={{
+                ...S.statusDot,
+                background: isStreaming ? "#ff6b35" : "#d4af37",
+                boxShadow: isStreaming
+                  ? "0 0 8px rgba(255,107,53,.6)"
+                  : "0 0 8px rgba(212,175,55,.5)",
+                animation: isStreaming
+                  ? "redPulse 1s ease-in-out infinite"
+                  : "amberPulse 2s ease-in-out infinite",
+              }}
+            />
           </div>
           <div
             style={{
@@ -572,194 +405,206 @@ export default function AlbertPanel() {
               marginTop: "3px",
             }}
           >
-            AI scout · researching Paul Skenes
+            {isStreaming ? "thinking…" : "AI scout · ready"}
           </div>
         </div>
-        <div style={S.chatDropdown}>Chat ▾</div>
+        <div style={S.chatDropdown}>
+          Chat ▾
+        </div>
       </div>
 
-      {/* Conversation */}
-      <div style={S.convo}>
-        {/* User message */}
-        <div
-          style={{
-            display: "flex",
-            gap: "10px",
-            maxWidth: "92%",
-            marginLeft: "auto",
-            flexDirection: "row-reverse",
-          }}
-        >
-          <div
-            style={{
-              width: "30px",
-              height: "30px",
-              borderRadius: "999px",
-              display: "grid",
-              placeItems: "center",
-              flexShrink: 0,
-              background:
-                "linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02))",
-              border: "0.5px solid rgba(255,255,255,.12)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "10px",
-              color: "rgba(255,255,255,.6)",
-              fontWeight: 500,
-            }}
-          >
-            JM
-          </div>
-          <div
-            style={{
-              padding: "13px 15px",
-              borderRadius: "12px",
-              fontSize: "13.5px",
-              lineHeight: 1.58,
-              background: "rgba(255,255,255,.06)",
-              border: "0.5px solid rgba(255,255,255,.08)",
-              backdropFilter: "blur(24px)",
-            }}
-          >
-            Compare Skenes&apos; slider to young Chris Sale&apos;s.
-          </div>
-        </div>
-
-        {/* Albert message */}
-        <div style={{ display: "flex", gap: "10px", maxWidth: "92%" }}>
-          <div style={S.albertMsgAv}>A</div>
-          <div style={S.albertBubble}>
-            <span style={S.lbl}>Albert · 2s</span>
-            Pulling both pitch mixes from age 22. Three things jump out —
-            Skenes throws it{" "}
-            <span style={S.callout}>+4 mph</span> harder (
-            <span style={S.stat}>87</span> vs <span style={S.stat}>83</span>),
-            Sale got <span style={S.callout}>+3 in</span> more horizontal break
-            (<span style={S.stat}>16 in</span> vs{" "}
-            <span style={S.stat}>13 in</span>), and Skenes&apos; vertical drop
-            is late — Sale&apos;s shape is flatter earlier. Visualizing on the
-            right.
-            {/* Player rows */}
-            <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "6px" }}>
-              <PlayerRow
-                id="skenes"
-                jersey="17"
-                jerseyColor="pit"
-                name="Paul Skenes"
-                role="RHP · PIT · age 23"
-                stat=".196 BA · 87 mph SL"
-                isHovered={hoveredPlayer === "skenes"}
-                onHover={setHoveredPlayer}
-              />
-              <PlayerRow
-                id="sale"
-                jersey="49"
-                jerseyColor="chw"
-                name="Chris Sale"
-                nameSuffix="(2011)"
-                role="LHP · CHW · age 22"
-                stat=".211 BA · 83 mph SL"
-                isHovered={hoveredPlayer === "sale"}
-                onHover={setHoveredPlayer}
-              />
-            </div>
-            <div style={S.genChip}>
-              <svg
-                width="10"
-                height="10"
-                viewBox="0 0 10 10"
-                fill="none"
-                style={{ flexShrink: 0 }}
+      {/* ── Conversation ── */}
+      <div ref={convoRef} style={S.convo}>
+        {messages.map((msg, i) => {
+          if (msg.role === "user") {
+            return (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  gap: "10px",
+                  maxWidth: "92%",
+                  marginLeft: "auto",
+                  flexDirection: "row-reverse",
+                }}
               >
-                <path
-                  d="M5 0L6.2 3.8H10L7 6.2L8.2 10L5 7.8L1.8 10L3 6.2L0 3.8H3.8L5 0Z"
-                  fill="#d4af37"
-                />
-              </svg>
-              Generated · Pitch Movement Bubble Chart →
+                <div
+                  style={{
+                    width: "30px",
+                    height: "30px",
+                    borderRadius: "999px",
+                    display: "grid",
+                    placeItems: "center",
+                    flexShrink: 0,
+                    background:
+                      "linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02))",
+                    border: "0.5px solid rgba(255,255,255,.12)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "10px",
+                    color: "rgba(255,255,255,.6)",
+                    fontWeight: 500,
+                  }}
+                >
+                  SR
+                </div>
+                <div
+                  style={{
+                    padding: "13px 15px",
+                    borderRadius: "12px",
+                    fontSize: "13.5px",
+                    lineHeight: 1.58,
+                    background: "rgba(255,255,255,.06)",
+                    border: "0.5px solid rgba(255,255,255,.08)",
+                    backdropFilter: "blur(24px)",
+                  }}
+                >
+                  {msg.content}
+                </div>
+              </div>
+            );
+          }
+
+          // Assistant message — skip empty ones (will be shown as typing indicator)
+          if (msg.content === "" && isStreaming && i === messages.length - 1) {
+            return null;
+          }
+
+          return (
+            <div key={i} style={{ display: "flex", gap: "10px", maxWidth: "92%" }}>
+              <div style={S.albertMsgAv}>A</div>
+              <div style={S.albertBubble} className="albert-bubble">
+                {!msg.isGreeting && (
+                  <span style={S.lbl}>Albert</span>
+                )}
+                <ReactMarkdown
+                  components={{
+                    // Paragraphs: spacing between them, none after last
+                    p: ({ children }) => (
+                      <p style={{ margin: "0 0 0.85em", lineHeight: "inherit" }}>
+                        {children}
+                      </p>
+                    ),
+                    // Bold inside serif-italic: switch to upright so it reads cleanly
+                    strong: ({ children }) => (
+                      <strong
+                        style={{
+                          fontStyle: "normal",
+                          fontWeight: 600,
+                          color: "rgba(255,255,255,.92)",
+                        }}
+                      >
+                        {children}
+                      </strong>
+                    ),
+                  }}
+                >
+                  {msg.content}
+                </ReactMarkdown>
+                {/* Streaming cursor */}
+                {isStreaming && i === messages.length - 1 && msg.content !== "" && (
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: "2px",
+                      height: "14px",
+                      background: "#d4af37",
+                      marginLeft: "2px",
+                      verticalAlign: "middle",
+                      animation: "redPulse .8s ease-in-out infinite",
+                      opacity: 0.7,
+                    }}
+                  />
+                )}
+              </div>
             </div>
-          </div>
-        </div>
+          );
+        })}
 
         {/* Typing indicator */}
-        <div style={{ display: "flex", gap: "10px", maxWidth: "92%" }}>
-          <div style={S.albertMsgAv}>A</div>
+        {showTyping && <TypingIndicator />}
+
+        {/* Error state */}
+        {error && (
           <div
             style={{
-              ...S.albertBubble,
-              padding: "11px 14px",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
+              padding: "10px 14px",
+              borderRadius: "8px",
+              background: "rgba(211,47,47,.08)",
+              border: "0.5px solid rgba(211,47,47,.25)",
+              fontFamily: "var(--font-mono)",
+              fontSize: "11px",
+              color: "rgba(255,100,100,.8)",
+              letterSpacing: ".06em",
             }}
           >
-            <span
-              style={{
-                display: "inline-flex",
-                gap: "4px",
-                padding: "4px 0",
-              }}
-            >
-              {[0, 0.2, 0.4].map((delay, i) => (
-                <span
-                  key={i}
-                  style={{
-                    width: "5px",
-                    height: "5px",
-                    borderRadius: "999px",
-                    background: "#d4af37",
-                    opacity: 0.4,
-                    animation: `dot 1.2s ${delay}s infinite ease-in-out`,
-                    display: "inline-block",
-                  }}
-                />
-              ))}
-            </span>
-            <span
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontStyle: "normal",
-                fontSize: "11px",
-                color: "rgba(255,255,255,.4)",
-                letterSpacing: ".1em",
-                textTransform: "uppercase",
-              }}
-            >
-              drafting comparison notes
-            </span>
+            {error}
           </div>
-        </div>
-      </div>
-
-      {/* Suggested follow-ups */}
-      <div style={S.suggest}>
-        <span style={S.suggestLbl}>Suggested follow-ups</span>
-        {["Add Strider as a third comp", "Show whiff rates", "Compare at age 25"].map(
-          (s) => (
-            <button key={s} style={S.pill}>
-              {s}
-            </button>
-          )
         )}
+
+        {/* Scroll anchor */}
+        <div ref={bottomRef} style={{ height: 1 }} />
       </div>
 
-      {/* Composer */}
+      {/* ── Suggestions ── */}
+      <div style={S.suggest}>
+        <span style={S.suggestLbl}>Try asking</span>
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            style={{
+              ...S.pill,
+              opacity: isStreaming ? 0.4 : 1,
+              pointerEvents: isStreaming ? "none" : "auto",
+            }}
+            onClick={() => submit(s)}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Composer ── */}
       <div style={S.composer}>
         <div style={S.composerBox}>
           <div style={S.composerIcon}>＋</div>
-          <div
+          <textarea
+            ref={textareaRef}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask Albert anything about baseball…"
+            rows={1}
+            disabled={isStreaming}
             style={{
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              resize: "none",
+              fontFamily: "var(--font-inter)",
               fontSize: "13.5px",
-              color: "rgba(255,255,255,.4)",
+              color: "rgba(255,255,255,.85)",
+              lineHeight: 1.5,
+              width: "100%",
               minHeight: "40px",
               paddingTop: "3px",
-              lineHeight: 1.5,
+              cursor: isStreaming ? "not-allowed" : "text",
+              opacity: isStreaming ? 0.5 : 1,
             }}
-          >
-            Ask Albert anything about baseball…
-          </div>
+          />
           <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
             <div style={S.composerIcon}>🎙</div>
-            <div style={S.sendBtn}>↵</div>
+            <button
+              onClick={() => submit(inputValue)}
+              disabled={isStreaming || !inputValue.trim()}
+              style={{
+                ...S.sendBtn,
+                opacity: isStreaming || !inputValue.trim() ? 0.4 : 1,
+                cursor:
+                  isStreaming || !inputValue.trim() ? "not-allowed" : "pointer",
+              }}
+            >
+              ↵
+            </button>
           </div>
         </div>
         <div style={S.sources}>
@@ -768,12 +613,18 @@ export default function AlbertPanel() {
               width: "5px",
               height: "5px",
               borderRadius: "999px",
-              background: "rgba(255,255,255,.4)",
+              background: "#d4af37",
               display: "inline-block",
               flexShrink: 0,
+              animation: isStreaming
+                ? "amberPulse .8s ease-in-out infinite"
+                : "none",
+              opacity: isStreaming ? 1 : 0.4,
             }}
           />
-          Synthesized · Baseball Savant · FanGraphs · B-Ref · MiLB.com
+          {isStreaming
+            ? "Querying Statcast · Synthesizing…"
+            : "Statcast · MLB Stats API · 2026 season data"}
         </div>
       </div>
     </div>
