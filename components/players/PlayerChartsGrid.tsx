@@ -9,12 +9,14 @@ import PitchMovement from "@/components/dashboard/viz/PitchMovement";
 import ReleasePoint from "@/components/dashboard/viz/ReleasePoint";
 import ZoneGrid from "@/components/dashboard/viz/ZoneGrid";
 import PercentileRankings from "@/components/dashboard/viz/PercentileRankings";
+import RollingChart from "@/components/players/RollingChart";
 import type {
   BubbleChartData,
   SprayChartData,
   PitcherPitchData,
   PercentileData,
 } from "@/lib/albert/viz-types";
+import type { GameLogEntry } from "@/lib/players/getGameLog";
 
 interface PlayerChartsGridProps {
   isPitcher: boolean;
@@ -28,11 +30,14 @@ interface PlayerChartsGridProps {
   // Pitcher charts
   bubbleData: BubbleChartData | null;
   pitchData: PitcherPitchData | null;
+  // Rolling trend
+  gameLog: GameLogEntry[];
 }
 
 type ChartId =
   | "percentile" | "spray" | "ev_la" | "bb_profile"
-  | "bubble" | "movement" | "release" | "zone";
+  | "bubble" | "movement" | "release" | "zone"
+  | "rolling";
 
 interface ChartDef {
   id: ChartId;
@@ -42,7 +47,8 @@ interface ChartDef {
 }
 
 const CHART_DEFS: ChartDef[] = [
-  { id: "percentile", label: "Percentile Rankings", forPitcher: true, forHitter: true  },
+  { id: "percentile", label: "Percentile Rankings", forPitcher: true,  forHitter: true  },
+  { id: "rolling",    label: "Season Trend",        forPitcher: true,  forHitter: true  },
   { id: "spray",      label: "Spray Chart",         forPitcher: false, forHitter: true  },
   { id: "ev_la",      label: "EV vs Launch Angle",  forPitcher: false, forHitter: true  },
   { id: "bb_profile", label: "Batted Ball Profile",  forPitcher: false, forHitter: true  },
@@ -54,7 +60,7 @@ const CHART_DEFS: ChartDef[] = [
 
 export default function PlayerChartsGrid({
   isPitcher, fullName, season,
-  percentileData, battedBallData, bubbleData, pitchData,
+  percentileData, battedBallData, bubbleData, pitchData, gameLog,
 }: PlayerChartsGridProps) {
   const availableCharts = CHART_DEFS.filter(
     (c) => isPitcher ? c.forPitcher : c.forHitter,
@@ -66,6 +72,16 @@ export default function PlayerChartsGrid({
 
   function renderChart() {
     switch (activeChart) {
+      case "rolling":
+        return (
+          <RollingChart
+            entries={gameLog}
+            isPitcher={isPitcher}
+            playerName={fullName}
+            season={season}
+          />
+        );
+
       case "percentile":
         if (!percentileData) return <Unavailable label="Percentile data" />;
         return <PercentileRankings data={percentileData} caption="" />;

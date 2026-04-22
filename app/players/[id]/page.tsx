@@ -7,6 +7,8 @@ import SeasonStats from "@/components/players/SeasonStats";
 import ProjectionsTable from "@/components/players/ProjectionsTable";
 import RecentSplits from "@/components/players/RecentSplits";
 import PlayerChartsGrid from "@/components/players/PlayerChartsGrid";
+import GameLog from "@/components/players/GameLog";
+import DetailedSplitsPanel from "@/components/players/DetailedSplits";
 import {
   getPlayerStats,
   extractStats,
@@ -19,6 +21,8 @@ import { getPitchData } from "@/lib/albert/tools/getPitchData";
 import { getPercentileData } from "@/lib/albert/tools/getPercentileData";
 import { getBatProjection, getPitProjection } from "@/lib/players/getProjections";
 import { getRecentSplits } from "@/lib/players/getRecentSplits";
+import { getGameLog } from "@/lib/players/getGameLog";
+import { getDetailedSplits } from "@/lib/players/getDetailedSplits";
 import type {
   BubbleChartData,
   SprayChartData,
@@ -82,6 +86,8 @@ export default async function PlayerProfilePage({
     battedBallResult,
     pitchArsenal,
     pitchDataResult,
+    gameLogResult,
+    detailedSplits,
   ] = await Promise.all([
     getFanGraphsStats(fullName, 2026, fgType as "bat" | "pit"),
     getRecentSplits(mlbId),
@@ -97,6 +103,8 @@ export default async function PlayerProfilePage({
     isPitcher || isTwp
       ? getPitchData({ pitcherId: mlbId, playerName: fullName, teamAbbr, season: 2025 })
       : Promise.resolve(null),
+    getGameLog(mlbId, 2026),
+    getDetailedSplits(mlbId, 2026, isPitcher && !isTwp),
   ]);
 
   // ── 4. Build typed stat objects ───────────────────────────────────────────────
@@ -240,6 +248,15 @@ export default async function PlayerProfilePage({
                 isPitcher={isPitcher && !isTwp}
               />
             </Panel>
+
+            {/* Platoon + home/away splits */}
+            <Panel>
+              <PanelLabel>Splits</PanelLabel>
+              <DetailedSplitsPanel
+                splits={detailedSplits}
+                isPitcher={isPitcher && !isTwp}
+              />
+            </Panel>
           </div>
 
           {/* Right column — charts */}
@@ -253,6 +270,18 @@ export default async function PlayerProfilePage({
               battedBallData={battedBallData}
               bubbleData={bubbleData}
               pitchData={pitchData}
+              gameLog={gameLogResult.entries}
+            />
+          </Panel>
+        </div>
+
+        {/* Game log — full width below grid */}
+        <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "0 48px 48px" }}>
+          <Panel>
+            <PanelLabel>Game Log — Last {gameLogResult.entries.length} Games</PanelLabel>
+            <GameLog
+              entries={gameLogResult.entries}
+              isPitcher={gameLogResult.type === "pitching"}
             />
           </Panel>
         </div>
@@ -271,6 +300,23 @@ function Panel({ children }: { children: React.ReactNode }) {
         padding: "20px 22px",
       }}
     >
+      {children}
+    </div>
+  );
+}
+
+function PanelLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontFamily: "var(--font-mono)",
+      fontSize: "9px",
+      color: "rgba(255,255,255,.3)",
+      textTransform: "uppercase",
+      letterSpacing: ".18em",
+      marginBottom: "14px",
+      paddingBottom: "8px",
+      borderBottom: "0.5px solid rgba(255,255,255,.06)",
+    }}>
       {children}
     </div>
   );
