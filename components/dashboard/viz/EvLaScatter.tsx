@@ -72,7 +72,6 @@ const BARREL_POLY = barrelPolygon();
 
 export default function EvLaScatter({
   data,
-  caption,
   size = "inline",
   filters = {},
 }: {
