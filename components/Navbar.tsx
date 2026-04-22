@@ -52,26 +52,11 @@ export default function Navbar({ email }: { email: string }) {
     >
       {/* Logo */}
       <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-        <div
-          style={{
-            width: "28px",
-            height: "28px",
-            display: "grid",
-            placeItems: "center",
-            background:
-              "radial-gradient(circle at 30% 30%, #ff8860, #D32F2F 60%, #7a1a1a)",
-            borderRadius: "7px",
-            boxShadow:
-              "0 0 18px rgba(211,47,47,.45), inset 0 0 8px rgba(255,255,255,.15)",
-            fontWeight: 700,
-            fontSize: "14px",
-            color: "#fff",
-            letterSpacing: "-.02em",
-            userSelect: "none",
-          }}
-        >
-          H
-        </div>
+        <img
+          src="/logo.png"
+          alt="Heater"
+          style={{ width: "28px", height: "28px", objectFit: "contain" }}
+        />
         <span
           style={{
             fontWeight: 600,

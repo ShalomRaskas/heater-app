@@ -40,27 +40,11 @@ export default function MobileSplash() {
         }}
       >
         {/* Logo mark */}
-        <div
-          style={{
-            width: "64px",
-            height: "64px",
-            borderRadius: "16px",
-            display: "grid",
-            placeItems: "center",
-            background:
-              "radial-gradient(circle at 30% 30%, #ff8860, #D32F2F 60%, #7a1a1a)",
-            boxShadow:
-              "0 0 0 0.5px rgba(255,255,255,.15) inset, 0 0 32px rgba(211,47,47,.5), 0 0 80px rgba(211,47,47,.25), 0 24px 48px rgba(211,47,47,.35)",
-            fontWeight: 800,
-            fontSize: "28px",
-            color: "#fff",
-            letterSpacing: "-.04em",
-            textShadow: "0 0 20px rgba(255,255,255,.35)",
-            marginBottom: "20px",
-          }}
-        >
-          H
-        </div>
+        <img
+          src="/logo.png"
+          alt="Heater"
+          style={{ width: "64px", height: "64px", objectFit: "contain", marginBottom: "20px" }}
+        />
 
         {/* Wordmark */}
         <div
