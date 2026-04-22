@@ -291,3 +291,156 @@ export async function getSavantPitchArsenal(
 
   return results.sort((a, b) => b.usage_pct - a.usage_pct);
 }
+
+// ─── Baseball Savant — batter contact metrics ─────────────────────────────────
+//
+// Expected-stats leaderboard CSV:
+//   https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=batter&year=YEAR&min=1&csv=true
+// Columns include: player_id, hard_hit_percent, exit_velocity_avg, barrel_batted_rate
+
+export interface SavantBatterMetrics {
+  hardHitRate: number | null;  // 0–1
+  avgExitVelo: number | null;  // mph
+  barrelRate:  number | null;  // 0–1
+}
+
+/**
+ * Fetch Statcast contact quality metrics for a batter from Baseball Savant.
+ * Returns null if the player isn't found or the request fails.
+ */
+export async function getSavantBatterMetrics(
+  mlbId: number,
+  season: number,
+): Promise<SavantBatterMetrics | null> {
+  try {
+    const url =
+      `${SAVANT_BASE}/leaderboard/expected_statistics` +
+      `?type=batter&year=${season}&position=&team=&min=1&csv=true`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": SAVANT_UA },
+      next: { revalidate: 7200 },
+    });
+    if (!res.ok) return null;
+
+    const text    = await res.text();
+    const lines   = text.trim().split("\n");
+    if (lines.length < 2) return null;
+
+    const headers  = parseCSVRow(lines[0]);
+    const idxId    = headers.indexOf("player_id");
+    const idxHH    = headers.indexOf("hard_hit_percent");
+    const idxEV    = headers.indexOf("exit_velocity_avg");
+    const idxBrl   = headers.indexOf("barrel_batted_rate");
+    if (idxId === -1) return null;
+
+    for (const line of lines.slice(1)) {
+      if (!line.trim()) continue;
+      const cols = parseCSVRow(line);
+      if (parseInt(cols[idxId]) !== mlbId) continue;
+
+      const pct = (i: number) =>
+        i >= 0 && cols[i] ? parseFloat(cols[i]) / 100 : null;
+      const flt = (i: number) =>
+        i >= 0 && cols[i] ? parseFloat(cols[i]) : null;
+
+      return {
+        hardHitRate: pct(idxHH),
+        avgExitVelo: flt(idxEV),
+        barrelRate:  pct(idxBrl),
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── FanGraphs — WAR, wRC+, FIP, BABIP ───────────────────────────────────────
+//
+// Dashboard leaderboard (type=8) returns WAR, wRC+, FIP, BABIP for all players
+// with no minimum plate appearances (qual=0).  Player names match the MLB API
+// "fullName" format ("Aaron Judge"), so we can match on exact name.
+
+export interface FanGraphsStats {
+  war:     number | null;
+  wrcPlus: number | null;  // null for pitchers
+  fip:     number | null;  // null for hitters
+  babip:   number | null;
+}
+
+function fgNum(obj: Record<string, unknown>, key: string): number | null {
+  const v = obj[key];
+  if (typeof v === "number") return isNaN(v) ? null : v;
+  if (typeof v === "string" && v !== "") {
+    const n = parseFloat(v);
+    return isNaN(n) ? null : n;
+  }
+  return null;
+}
+
+async function fetchFGLeaderboard(
+  type: "bat" | "pit",
+  season: number,
+): Promise<Array<Record<string, unknown>>> {
+  const url =
+    `https://www.fangraphs.com/api/leaders/major-league/data` +
+    `?pos=all&stats=${type}&lg=all&qual=0` +
+    `&season=${season}&season1=${season}` +
+    `&month=0&hand=&team=0&pageitems=3000&pagenum=1` +
+    `&ind=0&rost=0&players=0&type=8`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/122.0.0.0 Safari/537.36",
+      Referer: "https://www.fangraphs.com/leaders/major-league",
+      Accept: "application/json, text/plain, */*",
+    },
+    next: { revalidate: 7200 },
+  });
+  if (!res.ok) return [];
+  const json = await res.json();
+  return (json.data ?? []) as Array<Record<string, unknown>>;
+}
+
+/**
+ * Fetch WAR, wRC+, FIP, BABIP from FanGraphs for a named player.
+ * Matches on exact full name first, then last-name fallback.
+ * Returns null if not found or the request fails.
+ */
+export async function getFanGraphsStats(
+  playerName: string,
+  season: number,
+  type: "bat" | "pit",
+): Promise<FanGraphsStats | null> {
+  try {
+    const rows = await fetchFGLeaderboard(type, season);
+    if (!rows.length) return null;
+
+    const target = playerName.trim().toLowerCase();
+
+    const exact = rows.find(
+      r => (r["PlayerName"] as string ?? "").trim().toLowerCase() === target,
+    );
+
+    // Last-name fallback for slight name mismatches (e.g. "Shohei Ohtani" vs "Shohei Ohtani")
+    const match = exact ?? rows.find(r => {
+      const rowName    = (r["PlayerName"] as string ?? "").trim().toLowerCase();
+      const targetLast = target.split(" ").pop() ?? "";
+      const rowLast    = rowName.split(" ").pop() ?? "";
+      return targetLast.length > 3 && rowLast === targetLast;
+    });
+
+    if (!match) return null;
+
+    return {
+      war:     fgNum(match, "WAR"),
+      wrcPlus: fgNum(match, "wRC+"),
+      fip:     fgNum(match, "FIP"),
+      babip:   fgNum(match, "BABIP"),
+    };
+  } catch {
+    return null;
+  }
+}

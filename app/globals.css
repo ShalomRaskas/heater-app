@@ -81,6 +81,16 @@ body::before {
   50% { opacity: 0.8; transform: scale(1.04); }
 }
 
+@keyframes cardEntry {
+  from { opacity: 0; transform: scale(0.96) translateY(10px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);    }
+}
+
+.research-card:hover {
+  background: rgba(255,255,255,.055) !important;
+  border-color: rgba(255,255,255,.14) !important;
+}
+
 /* Responsive visibility — plain CSS, no Tailwind JIT dependency */
 .mobile-only {
   display: flex;
