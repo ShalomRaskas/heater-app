@@ -164,10 +164,25 @@ export interface CardData {
   pitchArsenal: CardArsenalPitch[];
 }
 
+export interface PercentileMetric {
+  label: string;
+  value: string;
+  percentile: number;
+}
+
+export interface PercentileData {
+  playerId: number;
+  playerName: string;
+  teamAbbr: string | null;
+  season: number;
+  type: "bat" | "pit";
+  metrics: PercentileMetric[];
+}
+
 /** Shape emitted as a "viz" NDJSON event from the streaming route. */
 export interface VizPayload {
   vizType: string;
   playerId: number;
-  data: BubbleChartData | SprayChartData | PitcherPitchData | CardData;
+  data: BubbleChartData | SprayChartData | PitcherPitchData | CardData | PercentileData;
   caption: string;
 }

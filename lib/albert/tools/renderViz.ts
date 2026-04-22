@@ -16,6 +16,7 @@ import { getPlayerStats, getSavantPitchArsenal } from "@/lib/mlb-api";
 import { getBattedBallData } from "@/lib/albert/tools/getBattedBallData";
 import { getPitchData } from "@/lib/albert/tools/getPitchData";
 import { renderCard } from "@/lib/albert/tools/renderCard";
+import { getPercentileData } from "@/lib/albert/tools/getPercentileData";
 import type {
   BubbleChartData,
   SprayChartData,
@@ -72,6 +73,30 @@ export async function renderViz(input: {
   // ── player_card ──────────────────────────────────────────────────────────
   if (input.type === "player_card") {
     return renderCard({ playerId: input.playerId, season, caption: input.caption });
+  }
+
+  // ── percentile_rankings ─────────────────────────────────────────────────
+  if (input.type === "percentile_rankings") {
+    const { playerName, teamAbbr } = await resolvePlayer(input.playerId, season);
+
+    const admin = createAdminClient();
+    const { data: player } = await admin
+      .from("players")
+      .select("position")
+      .eq("mlb_id", input.playerId)
+      .single();
+    const pos = player?.position ?? "";
+    const type: "bat" | "pit" = (pos === "SP" || pos === "RP" || pos === "P") ? "pit" : "bat";
+
+    const result = await getPercentileData({ mlbId: input.playerId, season, type });
+
+    return {
+      vizType: "percentile_rankings",
+      playerId: input.playerId,
+      data: { playerId: input.playerId, playerName, teamAbbr, season, type, metrics: result.metrics },
+      caption: input.caption,
+      ...(result.error ? { error: result.error } : {}),
+    };
   }
 
   // ── ev_la_scatter + bb_profile ──────────────────────────────────────────

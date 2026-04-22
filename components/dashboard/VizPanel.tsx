@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import type { VizBlock } from "./AlbertPanel";
-import type { BubbleChartData, SprayChartData, PitcherPitchData } from "@/lib/albert/viz-types";
+import type { BubbleChartData, SprayChartData, PitcherPitchData, PercentileData } from "@/lib/albert/viz-types";
 import type { SprayChartFilters } from "./viz/SprayChart";
 import type { BubbleChartFilters } from "./viz/BubbleChart";
 import type { ExitVeloZoneFilters } from "./viz/ExitVeloZone";
@@ -23,6 +23,7 @@ import BbProfile from "./viz/BbProfile";
 import PitchMovement from "./viz/PitchMovement";
 import ReleasePoint from "./viz/ReleasePoint";
 import ZoneGrid from "./viz/ZoneGrid";
+import PercentileRankings from "./viz/PercentileRankings";
 
 /* ── Filter state ────────────────────────────────────────────────────────── */
 interface FilterState {
@@ -103,6 +104,7 @@ function getDataSeason(viz: VizBlock | null): number {
   if (!viz) return 2025;
   if (BATTER_VIZ.has(viz.vizType)) return (viz.data as SprayChartData).season ?? 2025;
   if (PITCHER_VIZ.has(viz.vizType)) return (viz.data as PitcherPitchData).season ?? 2025;
+  if (viz.vizType === "percentile_rankings") return (viz.data as PercentileData).season ?? 2025;
   return 2025;
 }
 
@@ -112,15 +114,35 @@ export default function VizPanel({ latestViz }: { latestViz: VizBlock | null }) 
   const [seasonData, setSeasonData] = useState<VizBlock | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [activeViz, setActiveViz] = useState<VizBlock | null>(null);
+  const prevPlayerIdRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!latestViz) return;
+    if (!latestViz) {
+      setActiveViz(null);
+      prevPlayerIdRef.current = null;
+      return;
+    }
+
     setFilters({ ...DEFAULT_FILTERS, season: getDataSeason(latestViz) });
     setSeasonData(null);
     setFetchError(null);
+
+    const prevPlayerId = prevPlayerIdRef.current;
+    prevPlayerIdRef.current = latestViz.playerId;
+
+    if (prevPlayerId !== null && prevPlayerId !== latestViz.playerId) {
+      // New player — blank first, then render
+      setActiveViz(null);
+      const t = setTimeout(() => setActiveViz(latestViz), 150);
+      return () => clearTimeout(t);
+    } else {
+      setActiveViz(latestViz);
+    }
   }, [latestViz]);
 
-  const activeData = seasonData ?? latestViz;
+  const activeData = seasonData ?? activeViz;
+  const isTransitioning = !!latestViz && !activeViz;
 
   const handleSeasonChange = async (newSeason: number) => {
     if (!latestViz || newSeason === filters.season) return;
@@ -232,6 +254,7 @@ export default function VizPanel({ latestViz }: { latestViz: VizBlock | null }) 
   const isReleasePoint = vt === "release_point";
   const isZoneGrid     = vt === "zone_grid";
   const isCard         = false; // player_card routed to CardColumn in DashboardClient
+  const isPercentile   = vt === "percentile_rankings";
 
   // Batter charts: show pitcher-throws filter
   const showHandedness = isSpray || isExitVelo || isEvLa || isBbProfile;
@@ -239,7 +262,7 @@ export default function VizPanel({ latestViz }: { latestViz: VizBlock | null }) 
   const showStand = isHeatMap || isPitchTrack || isPitchMove || isReleasePoint || isZoneGrid;
   // Count filter: spray + EV/LA scatter only
   const showCount = isSpray || isEvLa;
-  const showNoFilters = isCard;
+  const showNoFilters = isCard || isPercentile;
 
   /* ── Filter objects passed to each chart component ── */
   const sprayFilters: SprayChartFilters = {
@@ -292,8 +315,9 @@ export default function VizPanel({ latestViz }: { latestViz: VizBlock | null }) 
     : isBbProfile  ? "Batted Ball Profile"
     : isPitchMove  ? "Pitch Movement"
     : isReleasePoint ? "Release Point"
-    : isZoneGrid   ? "Zone Grid"
-    : isCard       ? "Player Card"
+    : isZoneGrid     ? "Zone Grid"
+    : isPercentile   ? "Percentile Rankings"
+    : isCard         ? "Player Card"
     : "Visualization";
 
   return (
@@ -330,7 +354,7 @@ export default function VizPanel({ latestViz }: { latestViz: VizBlock | null }) 
           alignItems: "center", justifyContent: "center",
           padding: "12px", overflow: "hidden", minWidth: 0,
         }}>
-          {fetchError ? (
+          {isTransitioning ? null : fetchError ? (
             <div style={{
               padding: "16px", borderRadius: "8px",
               background: "rgba(211,47,47,.06)", border: "0.5px solid rgba(211,47,47,.2)",
@@ -416,6 +440,13 @@ export default function VizPanel({ latestViz }: { latestViz: VizBlock | null }) 
                   data={activeData!.data as PitcherPitchData}
                   caption={activeData!.caption}
                   size="panel" filters={zoneGridFilters}
+                />
+              )}
+              {isPercentile && (
+                <PercentileRankings
+                  data={activeData!.data as PercentileData}
+                  caption={activeData!.caption}
+                  size="panel"
                 />
               )}
               {/* Caption */}

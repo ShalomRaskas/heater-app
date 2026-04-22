@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildSystemPrompt, type PlayerData } from "@/lib/albert/system-prompt";
 import { getPlayerStats } from "@/lib/albert/tools/getPlayerStats";
+import { renderViz } from "@/lib/albert/tools/renderViz";
 
 // All four seeded players by MLB ID
 const MLB_IDS = [592450, 660271, 669373, 695243]; // Judge, Ohtani, Skubal, Miller
@@ -28,6 +29,35 @@ const TOOLS = [
         },
       },
       required: ["playerName"],
+    },
+  },
+  {
+    name: "renderViz",
+    description:
+      "Render a visualization inline in your response. Use when a visual communicates better than prose. Choose the right type:\n• bubble_chart — pitcher movement/arsenal (bubbles in break space)\n• spray_chart — batter batted-ball locations on field\n• exit_velo_zone — batter exit-velocity hot zones by field sector (use for 'where does he hit it hard?')\n• pitch_heatmap — pitcher location density heat map (use for 'where does he live in the zone?')\n• pitch_tracks — pitcher catcher-POV 3D trajectory lines (use for 'how does his arsenal move/drop?')\n• player_card — premium baseball card with headshot, team logo, bio, and season stats (use when user asks 'show me his card', 'pull up his card', 'baseball card', or to introduce a player)\n• ev_la_scatter — exit velocity vs launch angle scatter with barrel zone overlay (use for batted ball quality, hard-hit rate, barrel rate questions)\n• bb_profile — batted ball profile donut chart: GB/LD/FB/IFFB breakdown (use for 'is he a fly ball hitter?', 'batted ball profile' questions)\n• pitch_movement — pitch movement scatter pfx_x/pfx_z by pitch type with centroid labels (use for 'how does his arsenal move?', 'pitch movement' questions)\n• release_point — pitcher release position scatter by pitch type (use for 'where does he release?', 'arm slot', 'release point' questions)\n• zone_grid — pitch location density heatmap over 3x3 strike zone (use for 'where does he locate?', 'zone tendencies', 'pitch location' questions)\n• percentile_rankings — Statcast percentile bubble chart showing 8 key metrics vs MLB (use for 'how does he rank?', 'show me his percentiles', 'Savant card', 'percentile bubbles', 'how elite is he?')\nDo not render viz for general stat questions or single-number lookups.\n\nIMPORTANT: The rendered chart appears in the VizPanel which has interactive sidebar filters the user can toggle themselves — season, pitcher handedness (vs LHP/RHP), batter handedness (vs LHH/RHH), count state, and pitch type. When a user asks for a handedness split or count split, render the base chart and tell them they can use the sidebar filters in the panel to slice by that dimension. Do NOT refuse to render or give only prose.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        type: {
+          type: "string",
+          enum: ["bubble_chart", "spray_chart", "exit_velo_zone", "pitch_heatmap", "pitch_tracks", "player_card", "ev_la_scatter", "bb_profile", "pitch_movement", "release_point", "zone_grid", "percentile_rankings"],
+        },
+        playerId: {
+          type: "number",
+          description: "MLBAM player ID",
+        },
+        season: {
+          type: "number",
+          description: "Season year. Defaults to 2025.",
+          default: 2025,
+        },
+        caption: {
+          type: "string",
+          description:
+            "One-line caption — the chart's thesis, not a description of its axes.",
+        },
+      },
+      required: ["type", "playerId", "caption"],
     },
   },
 ];
@@ -98,7 +128,7 @@ export async function POST(req: NextRequest) {
     // ── 3. Build system prompt ─────────────────────────────────────────────────
     const systemPrompt = buildSystemPrompt(playerDataList);
 
-    // ── 4. Streaming tool-use loop ─────────────────────────────────────────────
+    // ── 4. Streaming tool-use loop (NDJSON output) ────────────────────────────
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const apiMessages: Anthropic.MessageParam[] = clientMessages.map((m) => ({
@@ -108,9 +138,16 @@ export async function POST(req: NextRequest) {
 
     const encoder = new TextEncoder();
 
+    const emitLine = (
+      controller: ReadableStreamDefaultController,
+      obj: Record<string, unknown>,
+    ) => {
+      controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+    };
+
     const readable = new ReadableStream({
       async start(controller) {
-        let hasStreamedAnyText = false;
+        let hasEmittedContent = false;
 
         try {
           let iterations = 0;
@@ -126,46 +163,84 @@ export async function POST(req: NextRequest) {
               messages: apiMessages,
             });
 
-            // Stream text deltas to the client as they arrive
+            // Forward text deltas immediately as NDJSON text events
             for await (const event of stream) {
               if (
                 event.type === "content_block_delta" &&
-                event.delta.type === "text_delta"
+                event.delta.type === "text_delta" &&
+                event.delta.text
               ) {
-                controller.enqueue(encoder.encode(event.delta.text));
-                hasStreamedAnyText = true;
+                emitLine(controller, { type: "text", delta: event.delta.text });
+                hasEmittedContent = true;
               }
             }
 
-            // Get the completed message to check stop reason and extract tool call
             const finalMessage = await stream.finalMessage();
 
             if (finalMessage.stop_reason === "tool_use") {
-              const toolUseBlock = finalMessage.content.find(
+              const toolUseBlocks = finalMessage.content.filter(
                 (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
               );
 
-              if (!toolUseBlock) break;
+              if (toolUseBlocks.length === 0) break;
 
-              const toolInput = toolUseBlock.input as {
-                playerName: string;
-                season?: number;
-              };
-              const toolResult = await getPlayerStats(toolInput);
+              // ── Process ALL tool calls in this message in parallel ──────────
+              const toolResults = await Promise.all(
+                toolUseBlocks.map(async (block) => {
+                  if (block.name === "renderViz") {
+                    const input = block.input as {
+                      type: string;
+                      playerId: number;
+                      season?: number;
+                      caption: string;
+                    };
+                    const result = await renderViz(input);
+
+                    if (!result.error) {
+                      emitLine(controller, {
+                        type: "viz",
+                        payload: {
+                          vizType: result.vizType,
+                          playerId: result.playerId,
+                          data: result.data,
+                          caption: result.caption,
+                        },
+                      });
+                      hasEmittedContent = true;
+                    }
+
+                    return {
+                      type: "tool_result" as const,
+                      tool_use_id: block.id,
+                      content: JSON.stringify(result),
+                    };
+                  } else if (block.name === "getPlayerStats") {
+                    const input = block.input as {
+                      playerName: string;
+                      season?: number;
+                    };
+                    const result = await getPlayerStats(input);
+
+                    return {
+                      type: "tool_result" as const,
+                      tool_use_id: block.id,
+                      content: JSON.stringify(result),
+                    };
+                  } else {
+                    // Unknown tool — return empty result
+                    return {
+                      type: "tool_result" as const,
+                      tool_use_id: block.id,
+                      content: JSON.stringify({ error: `Unknown tool: ${block.name}` }),
+                    };
+                  }
+                }),
+              );
 
               apiMessages.push({ role: "assistant", content: finalMessage.content });
-              apiMessages.push({
-                role: "user",
-                content: [
-                  {
-                    type: "tool_result",
-                    tool_use_id: toolUseBlock.id,
-                    content: JSON.stringify(toolResult),
-                  },
-                ],
-              });
+              apiMessages.push({ role: "user", content: toolResults });
 
-              continue; // restart the stream with updated messages
+              continue; // next iteration of the loop
             }
 
             break; // stop_reason === "end_turn"
@@ -173,11 +248,9 @@ export async function POST(req: NextRequest) {
 
           controller.close();
         } catch (err) {
-          if (hasStreamedAnyText) {
-            // Partial response is already rendered — close cleanly rather than erroring
+          if (hasEmittedContent) {
             controller.close();
           } else {
-            // Nothing rendered yet — signal the client to show the error bubble
             controller.error(err);
           }
         }
@@ -186,7 +259,7 @@ export async function POST(req: NextRequest) {
 
     return new Response(readable, {
       headers: {
-        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
         "Cache-Control": "no-cache",
         "X-Content-Type-Options": "nosniff",
       },

@@ -2,15 +2,20 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
+import { vizRegistry } from "./viz/registry";
 
-/* ─── Types ──────────────────────────────────────────────── */
+/* ─── Block types ─────────────────────────────────────────── */
+type TextBlock = { type: "text"; content: string };
+export type VizBlock = { type: "viz"; vizType: string; playerId: number; data: unknown; caption: string };
+type Block = TextBlock | VizBlock;
+
 interface Message {
   role: "user" | "assistant";
-  content: string;
-  isGreeting?: boolean; // display-only; excluded from API calls
+  blocks: Block[];
+  isGreeting?: boolean;
 }
 
-/* ─── Styles (same tokens as before) ─────────────────────── */
+/* ─── Styles ──────────────────────────────────────────────── */
 const S: Record<string, React.CSSProperties> = {
   root: {
     display: "flex",
@@ -43,15 +48,6 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: "22px",
     color: "#1a1608",
     flexShrink: 0,
-  },
-  statusDot: {
-    display: "inline-block",
-    width: "6px",
-    height: "6px",
-    borderRadius: "999px",
-    background: "#d4af37",
-    boxShadow: "0 0 8px rgba(212,175,55,.5)",
-    animation: "amberPulse 2s ease-in-out infinite",
   },
   chatDropdown: {
     marginLeft: "auto",
@@ -101,11 +97,11 @@ const S: Record<string, React.CSSProperties> = {
       "linear-gradient(180deg, rgba(212,175,55,.06), rgba(212,175,55,.02))",
     border: "0.5px solid rgba(212,175,55,.22)",
     boxShadow: "0 0 30px rgba(212,175,55,.05)",
-    fontFamily: "var(--font-serif)",
-    fontStyle: "italic",
-    fontSize: "16px",
-    lineHeight: 1.55,
-    letterSpacing: ".002em",
+    fontFamily: "var(--font-inter)",
+    fontStyle: "normal",
+    fontSize: "14px",
+    lineHeight: 1.6,
+    letterSpacing: ".01em",
     flex: 1,
     minWidth: 0,
   },
@@ -154,7 +150,7 @@ const S: Record<string, React.CSSProperties> = {
   },
   composerBox: {
     display: "grid",
-    gridTemplateColumns: "28px 1fr auto",
+    gridTemplateColumns: "1fr auto",
     gap: "12px",
     alignItems: "center",
     padding: "12px 14px",
@@ -194,22 +190,11 @@ const S: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     transition: "opacity .15s",
   },
-  sources: {
-    marginTop: "10px",
-    fontFamily: "var(--font-mono)",
-    fontSize: "9.5px",
-    color: "rgba(255,255,255,.4)",
-    textTransform: "uppercase" as const,
-    letterSpacing: ".14em",
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-  },
 };
 
-/* ─── Starter suggestions (V1 hardcoded) ─────────────────── */
+/* ─── Suggestions ─────────────────────────────────────────── */
 const SUGGESTIONS = [
-  "Tell me about Skubal's splitter",
+  "Tell me about Skubal's arsenal",
   "Compare Judge and Ohtani at the plate",
   "Is Miller's start sustainable?",
 ];
@@ -261,28 +246,58 @@ function TypingIndicator() {
   );
 }
 
-/* ─── Main component ──────────────────────────────────────── */
+/* ─── Markdown components for Albert's prose bubbles ─────── */
+const mdComponents = {
+  p: ({ children }: { children?: React.ReactNode }) => (
+    <p style={{ margin: "0 0 0.85em", lineHeight: "inherit" }}>{children}</p>
+  ),
+  strong: ({ children }: { children?: React.ReactNode }) => (
+    <strong
+      style={{
+        fontStyle: "normal",
+        fontWeight: 600,
+        color: "rgba(255,255,255,.92)",
+      }}
+    >
+      {children}
+    </strong>
+  ),
+};
+
+/* ─── Greeting ────────────────────────────────────────────── */
 const GREETING: Message = {
   role: "assistant",
-  content:
-    "What do you want to know about baseball today? I have full Statcast data on Judge, Ohtani, Skubal, and Miller — ask me anything.",
+  blocks: [
+    {
+      type: "text",
+      content:
+        "What do you want to know about baseball today? I have full Statcast data on Judge, Ohtani, Skubal, and Miller — ask me anything.",
+    },
+  ],
   isGreeting: true,
 };
 
-export default function AlbertPanel() {
+/* ─── Main component ──────────────────────────────────────── */
+export default function AlbertPanel({
+  onVizRendered,
+  onResponseStart,
+}: {
+  onVizRendered?: (viz: VizBlock) => void;
+  onResponseStart?: () => void;
+}) {
   const [messages, setMessages] = useState<Message[]>([GREETING]);
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const convoRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Scroll to bottom whenever messages update
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = convoRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   const submit = useCallback(
@@ -292,20 +307,29 @@ export default function AlbertPanel() {
 
       setError(null);
       setInputValue("");
+      onResponseStart?.();
 
-      // Build the new message list (excluding greeting from API payload)
-      const userMsg: Message = { role: "user", content: trimmed };
-      const assistantMsg: Message = { role: "assistant", content: "" };
+      const userMsg: Message = {
+        role: "user",
+        blocks: [{ type: "text", content: trimmed }],
+      };
+      const assistantMsg: Message = { role: "assistant", blocks: [] };
 
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setIsStreaming(true);
 
-      // Build API messages: real conversation history (no greeting)
+      // Extract text-only content for the Anthropic API (viz blocks are display-only)
       const apiMessages = [...messages, userMsg]
-        .filter((m) => !m.isGreeting && m.content !== "")
-        .map(({ role, content }) => ({ role, content }));
+        .filter((m) => !m.isGreeting)
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.blocks
+            .filter((b): b is TextBlock => b.type === "text")
+            .map((b) => b.content)
+            .join(""),
+        }))
+        .filter((m) => m.content !== "");
 
-      // Abort any prior in-flight request
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -330,31 +354,79 @@ export default function AlbertPanel() {
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        let buffer = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                content: last.content + chunk,
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Split on newlines — each complete line is one NDJSON object.
+          // The last element may be an incomplete line; keep it in the buffer.
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line) as {
+                type: string;
+                delta?: string;
+                payload?: { vizType: string; data: unknown; caption: string };
               };
+
+              if (event.type === "text" && event.delta) {
+                // Append text delta to the last text block, or start a new one
+                setMessages((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last?.role !== "assistant") return prev;
+                  const blocks = [...last.blocks];
+                  const lastBlock = blocks[blocks.length - 1];
+                  if (lastBlock?.type === "text") {
+                    blocks[blocks.length - 1] = {
+                      type: "text",
+                      content: lastBlock.content + event.delta!,
+                    };
+                  } else {
+                    blocks.push({ type: "text", content: event.delta! });
+                  }
+                  return [
+                    ...next.slice(0, -1),
+                    { ...last, blocks },
+                  ];
+                });
+              } else if (event.type === "viz" && event.payload) {
+                // Push a viz block — chart renders immediately
+                const vizBlock: VizBlock = {
+                  type: "viz",
+                  vizType: event.payload!.vizType,
+                  playerId: (event.payload as { playerId?: number }).playerId ?? 0,
+                  data: event.payload!.data,
+                  caption: event.payload!.caption,
+                };
+                setMessages((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last?.role !== "assistant") return prev;
+                  const blocks: Block[] = [...last.blocks, vizBlock];
+                  return [...next.slice(0, -1), { ...last, blocks }];
+                });
+                onVizRendered?.(vizBlock);
+              }
+            } catch {
+              // Malformed JSON line — ignore
             }
-            return next;
-          });
+          }
         }
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         const msg =
           err instanceof Error ? err.message : "Something went wrong.";
         setError(msg);
-        // Remove the empty assistant placeholder
         setMessages((prev) =>
-          prev[prev.length - 1]?.content === ""
+          prev[prev.length - 1]?.blocks.length === 0
             ? prev.slice(0, -1)
             : prev,
         );
@@ -372,10 +444,28 @@ export default function AlbertPanel() {
     }
   };
 
-  // Show typing indicator when streaming and the last message is still empty
+  const newConversation = useCallback(() => {
+    abortRef.current?.abort();
+    setIsStreaming(false);
+    setMessages([GREETING]);
+    setInputValue("");
+    setError(null);
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  }, []);
+
+  // Listen for queries dispatched by ResearchSection cards
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const query = (e as CustomEvent<{ query: string }>).detail?.query;
+      if (query) submit(query);
+    };
+    window.addEventListener("albert-query", handler);
+    return () => window.removeEventListener("albert-query", handler);
+  }, [submit]);
+
   const lastMsg = messages[messages.length - 1];
   const showTyping =
-    isStreaming && lastMsg?.role === "assistant" && lastMsg.content === "";
+    isStreaming && lastMsg?.role === "assistant" && lastMsg.blocks.length === 0;
 
   return (
     <div style={S.root}>
@@ -396,7 +486,10 @@ export default function AlbertPanel() {
             Albert
             <span
               style={{
-                ...S.statusDot,
+                display: "inline-block",
+                width: "6px",
+                height: "6px",
+                borderRadius: "999px",
                 background: isStreaming ? "#ff6b35" : "#d4af37",
                 boxShadow: isStreaming
                   ? "0 0 8px rgba(255,107,53,.6)"
@@ -420,15 +513,24 @@ export default function AlbertPanel() {
             {isStreaming ? "thinking…" : "AI scout · ready"}
           </div>
         </div>
-        <div style={S.chatDropdown}>
-          Chat ▾
-        </div>
+        <button
+          onClick={newConversation}
+          title="New conversation"
+          style={{ ...S.chatDropdown, background: "none", outline: "none" }}
+        >
+          New chat ＋
+        </button>
       </div>
 
       {/* ── Conversation ── */}
       <div ref={convoRef} style={S.convo}>
         {messages.map((msg, i) => {
+          /* User message */
           if (msg.role === "user") {
+            const textContent = msg.blocks
+              .filter((b): b is TextBlock => b.type === "text")
+              .map((b) => b.content)
+              .join("");
             return (
               <div
                 key={i}
@@ -470,50 +572,59 @@ export default function AlbertPanel() {
                     backdropFilter: "blur(24px)",
                   }}
                 >
-                  {msg.content}
+                  {textContent}
                 </div>
               </div>
             );
           }
 
-          // Assistant message — skip empty ones (will be shown as typing indicator)
-          if (msg.content === "" && isStreaming && i === messages.length - 1) {
+          /* Assistant message — skip empty placeholder while typing indicator is shown */
+          if (msg.blocks.length === 0 && isStreaming && i === messages.length - 1) {
             return null;
           }
 
+          /* Determine streaming cursor position */
+          const lastBlock = msg.blocks[msg.blocks.length - 1];
+          const showCursor =
+            isStreaming &&
+            i === messages.length - 1 &&
+            lastBlock?.type === "text" &&
+            lastBlock.content !== "";
+
           return (
-            <div key={i} style={{ display: "flex", gap: "10px", maxWidth: "92%" }}>
+            <div
+              key={i}
+              style={{ display: "flex", gap: "10px", maxWidth: "92%" }}
+            >
               <div style={S.albertMsgAv}>A</div>
               <div style={S.albertBubble} className="albert-bubble">
-                {!msg.isGreeting && (
-                  <span style={S.lbl}>Albert</span>
-                )}
-                <ReactMarkdown
-                  components={{
-                    // Paragraphs: spacing between them, none after last
-                    p: ({ children }) => (
-                      <p style={{ margin: "0 0 0.85em", lineHeight: "inherit" }}>
-                        {children}
-                      </p>
-                    ),
-                    // Bold inside serif-italic: switch to upright so it reads cleanly
-                    strong: ({ children }) => (
-                      <strong
-                        style={{
-                          fontStyle: "normal",
-                          fontWeight: 600,
-                          color: "rgba(255,255,255,.92)",
-                        }}
-                      >
-                        {children}
-                      </strong>
-                    ),
-                  }}
-                >
-                  {msg.content}
-                </ReactMarkdown>
-                {/* Streaming cursor */}
-                {isStreaming && i === messages.length - 1 && msg.content !== "" && (
+                {!msg.isGreeting && <span style={S.lbl}>Albert</span>}
+
+                {/* Render blocks */}
+                {msg.blocks.map((block, bi) => {
+                  if (block.type === "text") {
+                    return (
+                      <ReactMarkdown key={bi} components={mdComponents}>
+                        {block.content}
+                      </ReactMarkdown>
+                    );
+                  }
+                  if (block.type === "viz") {
+                    const Component = vizRegistry[block.vizType];
+                    if (!Component) return null;
+                    return (
+                      <Component
+                        key={bi}
+                        data={block.data}
+                        caption={block.caption}
+                      />
+                    );
+                  }
+                  return null;
+                })}
+
+                {/* Streaming cursor — appears after the last text block */}
+                {showCursor && (
                   <span
                     style={{
                       display: "inline-block",
@@ -553,8 +664,6 @@ export default function AlbertPanel() {
           </div>
         )}
 
-        {/* Scroll anchor */}
-        <div ref={bottomRef} style={{ height: 1 }} />
       </div>
 
       {/* ── Suggestions ── */}
@@ -578,7 +687,6 @@ export default function AlbertPanel() {
       {/* ── Composer ── */}
       <div style={S.composer}>
         <div style={S.composerBox}>
-          <div style={S.composerIcon}>＋</div>
           <textarea
             ref={textareaRef}
             value={inputValue}
@@ -604,22 +712,35 @@ export default function AlbertPanel() {
             }}
           />
           <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-            <div style={S.composerIcon}>🎙</div>
             <button
               onClick={() => submit(inputValue)}
               disabled={isStreaming || !inputValue.trim()}
+              aria-label="Send"
               style={{
                 ...S.sendBtn,
                 opacity: isStreaming || !inputValue.trim() ? 0.4 : 1,
-                cursor:
-                  isStreaming || !inputValue.trim() ? "not-allowed" : "pointer",
+                cursor: isStreaming || !inputValue.trim() ? "not-allowed" : "pointer",
               }}
             >
-              ↵
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M1 7h12M8 2l5 5-5 5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
           </div>
         </div>
-        <div style={S.sources}>
+        <div
+          style={{
+            marginTop: "8px",
+            fontFamily: "var(--font-mono)",
+            fontSize: "9.5px",
+            color: "rgba(255,255,255,.4)",
+            textTransform: "uppercase",
+            letterSpacing: ".1em",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
           <span
             style={{
               width: "5px",
@@ -628,9 +749,7 @@ export default function AlbertPanel() {
               background: "#d4af37",
               display: "inline-block",
               flexShrink: 0,
-              animation: isStreaming
-                ? "amberPulse .8s ease-in-out infinite"
-                : "none",
+              animation: isStreaming ? "amberPulse .8s ease-in-out infinite" : "none",
               opacity: isStreaming ? 1 : 0.4,
             }}
           />
