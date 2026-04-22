@@ -77,24 +77,22 @@ export async function getGameLog(
   season: number,
 ): Promise<GameLogResult> {
   try {
-    const [hitRes, pitRes] = await Promise.all([
-      fetch(
-        `${BASE}/people/${mlbId}/stats?stats=gameLog&season=${season}&group=hitting&sportId=1`,
-        { next: { revalidate: 300 } },
-      ),
-      fetch(
-        `${BASE}/people/${mlbId}/stats?stats=gameLog&season=${season}&group=pitching&sportId=1`,
-        { next: { revalidate: 300 } },
-      ),
-    ]);
-
-    const hitJson = hitRes.ok ? await hitRes.json() : null;
-    const pitJson = pitRes.ok ? await pitRes.json() : null;
+    const res = await fetch(
+      `${BASE}/people/${mlbId}/stats?stats=gameLog&season=${season}&group=hitting,pitching&sportId=1`,
+      { next: { revalidate: 300 } },
+    );
+    if (!res.ok) return { entries: [], type: "hitting" };
+    const json = await res.json();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const hitSplits: any[] = hitJson?.stats?.[0]?.splits ?? [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pitSplits: any[] = pitJson?.stats?.[0]?.splits ?? [];
+    const groups: any[] = json?.stats ?? [];
+
+    const hitSplits =
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      groups.find((g: any) => g.group?.displayName?.toLowerCase() === "hitting")?.splits ?? [];
+    const pitSplits =
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      groups.find((g: any) => g.group?.displayName?.toLowerCase() === "pitching")?.splits ?? [];
 
     if (pitSplits.length > hitSplits.length) {
       return {
