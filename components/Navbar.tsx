@@ -51,35 +51,12 @@ export default function Navbar({ email }: { email: string }) {
       }}
     >
       {/* Logo */}
-      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+      <div style={{ display: "flex", alignItems: "center" }}>
         <img
           src="/logo.png"
           alt="Heater"
-          style={{ width: "28px", height: "28px", objectFit: "contain" }}
+          style={{ height: "48px", width: "auto", objectFit: "contain" }}
         />
-        <span
-          style={{
-            fontWeight: 600,
-            fontSize: "15px",
-            letterSpacing: "-.01em",
-          }}
-        >
-          Heater
-          <em
-            style={{
-              fontStyle: "normal",
-              color: "rgba(255,255,255,.6)",
-              fontWeight: 500,
-              marginLeft: "7px",
-              fontSize: "11px",
-              fontFamily: "var(--font-mono)",
-              letterSpacing: ".1em",
-              textTransform: "uppercase",
-            }}
-          >
-            scout mode
-          </em>
-        </span>
       </div>
 
       {/* Primary nav */}
